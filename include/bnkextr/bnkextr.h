@@ -155,30 +155,34 @@ struct WEMFile
 
 using ExtractResult = std::variant<WEMFile, Object>;
 
-// TODO: return T instead of bool?
 template<typename T>
-boost::asio::experimental::coro<void, bool>
+boost::asio::experimental::coro<void, std::optional<T>>
 read_struct(boost::asio::stream_file& file,
-            T& structure,
             size_t& pos)
 {
     constexpr auto size = sizeof(T);
-//    std::cout << "size: " << size << "\n";
+    T structure{};
     auto buf = reinterpret_cast<char*>(&structure);
 
-    auto [ec, n] = co_await boost::asio::async_read(
+    // TODO: better error handling here?
+    const auto [ec, num_read] = co_await boost::asio::async_read(
         file,
         boost::asio::buffer(buf, size),
         boost::asio::as_tuple(boost::asio::deferred)
     );
 
-    pos += size;
-//    std::cout << "buf: " << std::string{buf, size} << "\n";
-//    std::cout << "ec : " << ec.message() << "\n";
-//    std::cout << "n  : " << n << "\n";
+    pos += num_read;
 
-    const auto success = !ec;
-    co_return success;
+    if (ec == boost::asio::error::eof)
+    {
+        co_return std::nullopt;
+    }
+    else if (ec)
+    {
+        throw boost::system::system_error(ec);
+    }
+
+    co_return structure;
 }
 
 // so we want a function that given some input (stream, filename?)
@@ -199,16 +203,14 @@ extract_file(boost::asio::stream_file& bnk_file,
 
     // yield type should be some wrapper type or union?
 
-    Section section{};
-    BankHeader bank_header{};
     Index index{};
-
     size_t pos = 0;
-
     std::vector<Index> wem_indices;
 
-    while (co_await read_struct(bnk_file, section, pos))
+    while (auto s_result = co_await read_struct<Section>(bnk_file, pos))
     {
+        auto section = s_result.value();
+
         if (swap_byte_order)
         {
             section.size = std::byteswap(section.size);
@@ -219,7 +221,8 @@ extract_file(boost::asio::stream_file& bnk_file,
         const auto sign = section.sign;
         if (compare(sign, "BKHD"))
         {
-            co_await read_struct(bnk_file, bank_header, pos);
+            auto bh_result = co_await read_struct<BankHeader>(bnk_file, pos);
+            auto bank_header = bh_result.value();
             pos = bnk_file.seek(section.size - sizeof(BankHeader),
                                 boost::asio::file_base::seek_cur);
         }
@@ -228,7 +231,8 @@ extract_file(boost::asio::stream_file& bnk_file,
             // WEM file indices.
             for (auto i = 0U; i < section.size; i += sizeof(Index))
             {
-                co_await read_struct(bnk_file, index, pos);
+                auto i_result = co_await read_struct<Index>(bnk_file, pos);
+                index = i_result.value();
                 wem_indices.emplace_back(index);
             }
         }
@@ -261,13 +265,12 @@ extract_file(boost::asio::stream_file& bnk_file,
         }
         else if (compare(sign, "HIRC"))
         {
-            uint32_t object_count = 0;
-            co_await read_struct(bnk_file, object_count, pos);
+            auto object_count = co_await read_struct<uint32_t>(bnk_file, pos);
 
             for (auto i = 0U; i < object_count; ++i)
             {
-                Object object{};
-                co_await read_struct(bnk_file, object, pos);
+                auto o_result = co_await read_struct<Object>(bnk_file, pos);
+                auto object = o_result.value();
 
                 // TODO: check object type.
 
@@ -286,7 +289,8 @@ extract_file(boost::asio::stream_file& bnk_file,
 
 boost::asio::awaitable<void>
 extract_file_task(boost::asio::io_context& ctx,
-                  const std::string& filename)
+                  const std::string& filename,
+                  bool swap_byte_order = false)
 {
     boost::filesystem::path path = boost::filesystem::current_path();
     std::cout << "extract_file_task\n";
@@ -303,7 +307,7 @@ extract_file_task(boost::asio::io_context& ctx,
 
     std::vector<uint32_t> ids;
 
-    auto exc = extract_file(bnk_file);
+    auto exc = extract_file(bnk_file, swap_byte_order);
     while (auto result = co_await exc.async_resume(boost::asio::use_awaitable))
     {
         auto result_variant = result.value();
