@@ -211,7 +211,7 @@ extract_file(boost::asio::stream_file& bnk_file,
     {
         if (swap_byte_order)
         {
-            // TODO
+            section.size = std::byteswap(section.size);
         }
 
         const auto section_pos = pos;
@@ -238,18 +238,23 @@ extract_file(boost::asio::stream_file& bnk_file,
         }
         else if (compare(sign, "DATA"))
         {
-            for (const auto& [id, offset, size]: wem_indices)
+            for (auto& [id, offset, size]: wem_indices)
             {
+                if (swap_byte_order)
+                {
+                    size = std::byteswap(size);
+                    offset = std::byteswap(offset);
+                }
+
                 std::vector<char> data(size, 0);
                 co_await boost::asio::async_read(
                     bnk_file,
                     boost::asio::buffer(data, size),
                     boost::asio::deferred
                 );
-                // std::cout << "id: " << id << "\n";
                 WEMFile wem_file{
                     .index{id, offset, size},
-                    .data{std::move(data)},
+                    .data{data},
                 };
                 co_yield wem_file;
             }
