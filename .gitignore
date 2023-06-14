@@ -366,3 +366,4 @@ FodyWeavers.xsd
 
 # JetBrains IDES
 .idea/
+cmake-build-*/

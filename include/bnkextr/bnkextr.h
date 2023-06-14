@@ -13,6 +13,17 @@
 #include <boost/asio/stream_file.hpp>
 #include <boost/asio/experimental/coro.hpp>
 
+namespace
+{
+
+template<size_t N>
+bool compare(const std::array<char, N>& arr, const std::string& str)
+{
+    return std::equal(arr.cbegin(), arr.cend(), str.cbegin());
+}
+
+} // namespace
+
 namespace bnkextr
 {
 
@@ -28,7 +39,7 @@ struct Index
 #pragma pack(push, 1)
 struct Section
 {
-    char sign[4];
+    std::array<char, 4> sign;
     std::uint32_t size;
 };
 #pragma pack(pop)
@@ -135,10 +146,12 @@ struct EventActionObject
     std::vector<std::int8_t> parameters;
 };
 
+// TODO: return T instead of bool?
 template<typename T>
 boost::asio::experimental::coro<void, bool>
-read_structure(boost::asio::stream_file& file,
-               T& structure)
+read_struct(boost::asio::stream_file& file,
+            T& structure,
+            size_t& pos)
 {
     constexpr auto size = sizeof(T);
 //    std::cout << "size: " << size << "\n";
@@ -147,17 +160,17 @@ read_structure(boost::asio::stream_file& file,
     auto [ec, n] = co_await boost::asio::async_read(
         file,
         boost::asio::buffer(buf, size),
-        // TODO: upgrade boost and use deferred here?
-        boost::asio::as_tuple(boost::asio::experimental::use_coro)
+        boost::asio::as_tuple(boost::asio::deferred)
     );
 
+    pos += size;
     std::cout << "buf: " << std::string{buf, size} << "\n";
     std::cout << "ec : " << ec.message() << "\n";
     std::cout << "n  : " << n << "\n";
 
     const auto success = !ec;
     co_return success;
-};
+}
 
 // so we want a function that given some input (stream, filename?)
 // -> asynchronously process said input
@@ -177,27 +190,64 @@ extract_file(boost::asio::stream_file& bnk_file,
 
     // yield type should be some wrapper type or union?
 
-    Section content_section{};
+    Section section{};
+    BankHeader bank_header{};
+    Index index{};
+
     size_t data_offset = 0;
-    uint64_t total = 0;
+    size_t pos = 0;
 
-    while (bnk_file.is_open())
+    while (co_await read_struct(bnk_file, section, pos))
     {
-        // auto rs = read_structure(bnk_file, content_section);
-        const auto success = co_await read_structure(bnk_file, content_section);
-        total += content_section.size;
-        std::cout << "total: " << total << "\n";
-
-        if (!success)
+        if (swap_byte_order)
         {
-            break;
+            // TODO
         }
 
-        bnk_file.seek(
-            content_section.size,
-            boost::asio::file_base::seek_cur);
+        const auto section_pos = pos;
 
-        // std::cout << "success: " << std::to_string(success) << "\n";
+        const auto sign = section.sign;
+        if (compare(sign, "BKHD"))
+        {
+            co_await read_struct(bnk_file, bank_header, pos);
+            pos = bnk_file.seek(section.size - sizeof(BankHeader),
+                                boost::asio::file_base::seek_cur);
+        }
+        else if (compare(sign, "DIDX"))
+        {
+            for (auto i = 0U; i < section.size; i += sizeof(Index))
+            {
+                co_await read_struct(bnk_file, index, pos);
+            }
+        }
+        else if (compare(sign, "STID"))
+        {
+
+        }
+        else if (compare(sign, "DATA"))
+        {
+            data_offset = pos;
+        }
+        else if (compare(sign, "HIRC"))
+        {
+            uint32_t object_count = 0;
+            co_await read_struct(bnk_file, object_count, pos);
+
+            for (auto i = 0U; i < object_count; ++i)
+            {
+                Object object{};
+                co_await read_struct(bnk_file, object, pos);
+
+                // TODO: check object type.
+
+                bnk_file.seek(object.size - sizeof(uint32_t),
+                              boost::asio::file_base::seek_cur);
+            }
+        }
+
+        pos = bnk_file.seek(
+            section_pos + section.size,
+            boost::asio::file_base::seek_set);
     }
 
     co_return;

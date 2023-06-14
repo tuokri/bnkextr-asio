@@ -4,7 +4,7 @@ project(bnkextr)
 
 set(CMAKE_CXX_STANDARD 23)
 
-# add_compile_options(-Wall -pedantic -Wpedantic -Wextra)
+add_compile_options(-Wall -pedantic -Wpedantic -Wextra)
 
 # add_compile_options(/await:strict)
 add_compile_options(-fcoroutines -fconcepts-diagnostics-depth=5)
@@ -13,7 +13,7 @@ add_compile_definitions(BOOST_ASIO_HAS_IO_URING)
 set(Boost_USE_DEBUG_LIBS $<$<CONFIG:Debug>:ON,OFF>)
 
 find_package(
-    Boost
+    Boost 1.82
     COMPONENTS
     system
     filesystem
@@ -47,13 +47,13 @@ target_include_directories(
 target_compile_features(
     bnkextr
     PUBLIC
-    cxx_std_20
+    cxx_std_23
 )
 
 target_compile_features(
     bnkextr_test
     PUBLIC
-    cxx_std_20
+    cxx_std_23
 )
 
 # set_target_properties(bnkextr
