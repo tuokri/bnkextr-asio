@@ -6,6 +6,7 @@
 #include <iostream>
 #include <string>
 #include <array>
+#include <variant>
 
 #include <boost/filesystem.hpp>
 #include <boost/asio.hpp>
@@ -146,6 +147,14 @@ struct EventActionObject
     std::vector<std::int8_t> parameters;
 };
 
+struct WEMFile
+{
+    Index index;
+    std::vector<char> data;
+};
+
+using ExtractResult = std::variant<WEMFile, Object>;
+
 // TODO: return T instead of bool?
 template<typename T>
 boost::asio::experimental::coro<void, bool>
@@ -164,9 +173,9 @@ read_struct(boost::asio::stream_file& file,
     );
 
     pos += size;
-    std::cout << "buf: " << std::string{buf, size} << "\n";
-    std::cout << "ec : " << ec.message() << "\n";
-    std::cout << "n  : " << n << "\n";
+//    std::cout << "buf: " << std::string{buf, size} << "\n";
+//    std::cout << "ec : " << ec.message() << "\n";
+//    std::cout << "n  : " << n << "\n";
 
     const auto success = !ec;
     co_return success;
@@ -177,7 +186,7 @@ read_struct(boost::asio::stream_file& file,
 // -> yield wem files (also need data_offset)
 // -> yield objects
 
-boost::asio::experimental::coro<void, void>
+boost::asio::experimental::coro<ExtractResult, void>
 extract_file(boost::asio::stream_file& bnk_file,
              bool swap_byte_order = false)
 {
@@ -194,8 +203,9 @@ extract_file(boost::asio::stream_file& bnk_file,
     BankHeader bank_header{};
     Index index{};
 
-    size_t data_offset = 0;
     size_t pos = 0;
+
+    std::vector<Index> wem_indices;
 
     while (co_await read_struct(bnk_file, section, pos))
     {
@@ -215,18 +225,34 @@ extract_file(boost::asio::stream_file& bnk_file,
         }
         else if (compare(sign, "DIDX"))
         {
+            // WEM file indices.
             for (auto i = 0U; i < section.size; i += sizeof(Index))
             {
                 co_await read_struct(bnk_file, index, pos);
+                wem_indices.emplace_back(index);
             }
         }
         else if (compare(sign, "STID"))
         {
-
+            // Not implemented.
         }
         else if (compare(sign, "DATA"))
         {
-            data_offset = pos;
+            for (const auto& [id, offset, size]: wem_indices)
+            {
+                std::vector<char> data(size, 0);
+                co_await boost::asio::async_read(
+                    bnk_file,
+                    boost::asio::buffer(data, size),
+                    boost::asio::deferred
+                );
+                // std::cout << "id: " << id << "\n";
+                WEMFile wem_file{
+                    .index{id, offset, size},
+                    .data{std::move(data)},
+                };
+                co_yield wem_file;
+            }
         }
         else if (compare(sign, "HIRC"))
         {
@@ -270,8 +296,23 @@ extract_file_task(boost::asio::io_context& ctx,
 
     std::cout << "file init\n";
 
+    std::vector<uint32_t> ids;
+
     auto exc = extract_file(bnk_file);
-    co_await exc.async_resume(boost::asio::use_awaitable);
+    while (auto result = co_await exc.async_resume(boost::asio::use_awaitable))
+    {
+        auto result_variant = result.value();
+        if (std::holds_alternative<WEMFile>(result_variant))
+        {
+            auto wem_file = std::get<WEMFile>(result_variant);
+            std::cout << "id       : " << wem_file.index.id << "\n";
+            std::cout << "data len : " << wem_file.data.size() << "\n";
+
+            ids.emplace_back(wem_file.index.id);
+        }
+    }
+
+    std::cout << "ids.size(): " << ids.size() << "\n";
 
     std::cout << "?\n" << std::endl;
 
