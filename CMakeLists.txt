@@ -8,17 +8,17 @@ add_compile_options(-Wall -pedantic -Wpedantic -Wextra)
 
 # add_compile_options(/await:strict)
 add_compile_options(-fcoroutines -fconcepts-diagnostics-depth=5)
+
 add_compile_definitions(BOOST_ASIO_HAS_IO_URING)
 
 set(Boost_USE_DEBUG_LIBS $<$<CONFIG:Debug>:ON,OFF>)
+set(Boost_USE_MULTITHREADED ON)
 
 find_package(
     Boost 1.82
     COMPONENTS
     system
     filesystem
-    # url
-    # json
     REQUIRED
 )
 
@@ -56,12 +56,6 @@ target_compile_features(
     cxx_std_23
 )
 
-# set_target_properties(bnkextr
-#     PROPERTIES
-#     CXX_STANDARD_REQUIRED YES
-#     CXX_EXTENSIONS NO
-#     )
-
 target_link_libraries(
     bnkextr
     PUBLIC
@@ -81,14 +75,3 @@ target_link_libraries(
     pthread
     uring
 )
-
-# Static Runtime
-# if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
-#     set_property(TARGET bnkextr PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-# elseif ((CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "GNU") AND NOT APPLE)
-#     target_link_options(bnkextr PRIVATE -static)
-# endif ()
-
-# Install executable
-# install(TARGETS bnkextr
-#     RUNTIME DESTINATION .)

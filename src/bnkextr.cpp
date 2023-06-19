@@ -12,8 +12,8 @@ constexpr auto bnk = "WwiseDefaultBank_WW_VOX_OBJ_ZedLanding.bnk";
 
 int main()
 {
-    try
-    {
+//    try
+//    {
         boost::asio::io_context ctx;
 
         const std::string test{bnk};
@@ -30,20 +30,18 @@ int main()
             }
         );
 
-        std::cout << "gonna run\n";
         ctx.run();
-        std::cout << "ran\n";
-    }
-    catch (const std::exception& ex)
-    {
-        std::cout << ex.what() << "\n";
-        return EXIT_FAILURE;
-    }
-    catch (...)
-    {
-        std::cout << "unhandled error\n";
-        return EXIT_FAILURE;
-    }
+//    }
+//    catch (const std::exception& ex)
+//    {
+//        std::cout << ex.what() << "\n";
+//        throw;
+//    }
+//    catch (...)
+//    {
+//        std::cout << "unhandled error\n";
+//        return EXIT_FAILURE;
+//    }
 
     return EXIT_SUCCESS;
 }

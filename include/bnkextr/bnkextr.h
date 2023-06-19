@@ -7,6 +7,7 @@
 #include <string>
 #include <array>
 #include <variant>
+#include <unordered_map>
 
 #include <boost/filesystem.hpp>
 #include <boost/asio.hpp>
@@ -14,13 +15,29 @@
 #include <boost/asio/stream_file.hpp>
 #include <boost/asio/experimental/coro.hpp>
 
+#include "bnkextr/structs.h"
+
 namespace
 {
 
+using EventMap = std::unordered_map<uint32_t, bnkextr::EventObject>;
+using EventActionMap = std::unordered_map<uint32_t, bnkextr::EventActionObject>;
+
 template<size_t N>
-bool compare(const std::array<char, N>& arr, const std::string& str)
+bool compare(const std::array<uint8_t, N>& arr, const std::string& str)
 {
     return std::equal(arr.cbegin(), arr.cend(), str.cbegin());
+}
+
+auto make_path(const std::string& filename)
+{
+    boost::filesystem::path path{filename};
+    path = boost::filesystem::absolute(path);
+#if defined(WIN32) || defined(_WIN32) || defined(__WIN32) || defined(__CYGWIN__)
+    return boost::filesystem::path{R"(\\?\)"}.concat(path);
+#else
+    return path;
+#endif
 }
 
 } // namespace
@@ -28,141 +45,33 @@ bool compare(const std::array<char, N>& arr, const std::string& str)
 namespace bnkextr
 {
 
-#pragma pack(push, 1)
-struct Index
-{
-    std::uint32_t id;
-    std::uint32_t offset;
-    std::uint32_t size;
-};
-#pragma pack(pop)
-
-#pragma pack(push, 1)
-struct Section
-{
-    std::array<char, 4> sign;
-    std::uint32_t size;
-};
-#pragma pack(pop)
-
-#pragma pack(push, 1)
-struct BankHeader
-{
-    std::uint32_t version;
-    std::uint32_t id;
-};
-#pragma pack(pop)
-
-enum class ObjectType: std::int8_t
-{
-    SoundEffectOrVoice = 2,
-    EventAction = 3,
-    Event = 4,
-    RandomOrSequenceContainer = 5,
-    SwitchContainer = 6,
-    ActorMixer = 7,
-    AudioBus = 8,
-    BlendContainer = 9,
-    MusicSegment = 10,
-    MusicTrack = 11,
-    MusicSwitchContainer = 12,
-    MusicPlaylistContainer = 13,
-    Attenuation = 14,
-    DialogueEvent = 15,
-    MotionBus = 16,
-    MotionFx = 17,
-    Effect = 18,
-    Unknown = 19,
-    AuxiliaryBus = 20
-};
-
-#pragma pack(push, 1)
-struct Object
-{
-    ObjectType type;
-    std::uint32_t size;
-    std::uint32_t id;
-};
-#pragma pack(pop)
-
-struct EventObject
-{
-    std::uint32_t action_count;
-    std::vector<std::uint32_t> action_ids;
-};
-
-enum class EventActionScope: std::int8_t
-{
-    SwitchOrTrigger = 1,
-    Global = 2,
-    GameObject = 3,
-    State = 4,
-    All = 5,
-    AllExcept = 6
-};
-
-enum class EventActionType: std::int8_t
-{
-    Stop = 1,
-    Pause = 2,
-    Resume = 3,
-    Play = 4,
-    Trigger = 5,
-    Mute = 6,
-    UnMute = 7,
-    SetVoicePitch = 8,
-    ResetVoicePitch = 9,
-    SetVoiceVolume = 10,
-    ResetVoiceVolume = 11,
-    SetBusVolume = 12,
-    ResetBusVolume = 13,
-    SetVoiceLowPassFilter = 14,
-    ResetVoiceLowPassFilter = 15,
-    EnableState = 16,
-    DisableState = 17,
-    SetState = 18,
-    SetGameParameter = 19,
-    ResetGameParameter = 20,
-    SetSwitch = 21,
-    ToggleBypass = 22,
-    ResetBypassEffect = 23,
-    Break = 24,
-    Seek = 25
-};
-
-enum class EventActionParameterType: std::int8_t
-{
-    Delay = 0x0E,
-    Play = 0x0F,
-    Probability = 0x10
-};
-
-struct EventActionObject
-{
-    EventActionScope scope;
-    EventActionType action_type;
-    std::uint32_t game_object_id;
-    std::uint8_t parameter_count;
-    std::vector<EventActionParameterType> parameters_types;
-    std::vector<std::int8_t> parameters;
-};
-
-struct WEMFile
-{
-    Index index;
-    std::vector<char> data;
-};
-
 using ExtractResult = std::variant<WEMFile, Object>;
 
+// TODO: needed?
 template<typename T>
-boost::asio::experimental::coro<void, std::optional<T>>
-read_struct(boost::asio::stream_file& file,
-            size_t& pos)
+boost::asio::experimental::coro<void, T>
+read_struct(boost::asio::stream_file& file)
 {
     constexpr auto size = sizeof(T);
     T structure{};
-    auto buf = reinterpret_cast<char*>(&structure);
+    auto buf = reinterpret_cast<uint8_t*>(&structure);
+
+    const auto num_read = co_await boost::asio::async_read(
+        file,
+        boost::asio::buffer(buf, size),
+        boost::asio::deferred
+    );
+
+    co_return structure;
+}
+
+template<typename T>
+boost::asio::experimental::coro<void, std::optional<T>>
+maybe_read_struct(boost::asio::stream_file& file)
+{
+    constexpr auto size = sizeof(T);
+    T structure{};
+    auto buf = reinterpret_cast<uint8_t*>(&structure);
 
     // TODO: better error handling here?
     const auto [ec, num_read] = co_await boost::asio::async_read(
@@ -170,8 +79,6 @@ read_struct(boost::asio::stream_file& file,
         boost::asio::buffer(buf, size),
         boost::asio::as_tuple(boost::asio::deferred)
     );
-
-    pos += num_read;
 
     if (ec == boost::asio::error::eof)
     {
@@ -185,29 +92,103 @@ read_struct(boost::asio::stream_file& file,
     co_return structure;
 }
 
-// so we want a function that given some input (stream, filename?)
-// -> asynchronously process said input
-// -> yield wem files (also need data_offset)
-// -> yield objects
+boost::asio::experimental::coro<void>
+handle_object(
+    boost::asio::stream_file& bank_file,
+    const BankHeader& bank_header,
+    const Object& object,
+    EventMap& event_objects,
+    EventActionMap& event_action_objects)
+{
+    EventObject event{};
+    EventActionObject event_action{};
+    std::optional<EventActionScope> scope_result;
+    std::optional<EventActionType> type_result;
+    std::optional<uint32_t> id_result;
+    std::optional<uint8_t> count_result;
+    std::optional<EventActionParameterType> param_type_result;
+    std::optional<uint8_t> param_result;
+
+    switch (object.type)
+    {
+        case ObjectType::Event:
+            if (bank_header.version >= 134)
+            {
+                count_result = co_await maybe_read_struct<uint8_t>(bank_file);
+                event.action_count = count_result.value();
+                event.action_count = static_cast<uint32_t>(event.action_count);
+            }
+            else
+            {
+                count_result = co_await maybe_read_struct<uint32_t>(bank_file);
+                event.action_count = count_result.value();
+            }
+
+            for (auto i = 0U; i < event.action_count; ++i)
+            {
+                const auto action_id_result = co_await maybe_read_struct<uint32_t>(bank_file);
+                event.action_ids.emplace_back(action_id_result.value());
+            }
+
+            event_objects[object.id] = event;
+            break;
+        case ObjectType::EventAction:
+            scope_result = co_await maybe_read_struct<EventActionScope>(bank_file);
+            event_action.scope = scope_result.value_or(EventActionScope{});
+            type_result = co_await maybe_read_struct<EventActionType>(bank_file);
+            event_action.action_type = type_result.value_or(EventActionType{});
+            id_result = co_await maybe_read_struct<uint32_t>(bank_file);
+            event_action.game_object_id = id_result.value_or(0);
+
+            bank_file.seek(1, boost::asio::file_base::seek_cur);
+
+            count_result = co_await maybe_read_struct<uint8_t>(bank_file);
+            event_action.parameter_count = count_result.value_or(0);
+
+            for (auto j = 0U; static_cast<size_t>(event_action.parameter_count); ++j)
+            {
+                param_type_result = co_await maybe_read_struct<EventActionParameterType>(
+                    bank_file);
+                event_action.parameters_types.emplace_back(param_type_result.value_or(
+                    EventActionParameterType{}));
+            }
+
+            for (auto j = 0U; static_cast<size_t>(event_action.parameter_count); ++j)
+            {
+                param_result = co_await maybe_read_struct<uint8_t>(bank_file);
+                event_action.parameters.emplace_back(param_result.value_or(0));
+            }
+
+            bank_file.seek(1, boost::asio::file_base::seek_cur);
+            bank_file.seek(object.size - 13 - event_action.parameter_count * 2,
+                           boost::asio::file_base::seek_cur);
+
+            event_action_objects[object.id] = event_action;
+
+            break;
+        default:
+            // Just ignore for now. Not all are known.
+            // throw std::runtime_error(
+            //     "invalid object type " + std::to_string(
+            //         static_cast
+            //             <std::underlying_type<ObjectType>::type>(
+            //             object.type))
+            // );
+            co_return;
+    }
+}
 
 boost::asio::experimental::coro<ExtractResult, void>
-extract_file(boost::asio::stream_file& bnk_file,
+extract_file(boost::asio::stream_file& bank_file,
              bool swap_byte_order = false)
 {
-    std::cout << "extract_file" << std::endl;
-
-    // open stream
-    // yield objects
-    // read and store until data_offset found (pseudo blocking)
-    // yield wem files (use data_offset here)
-
-    // yield type should be some wrapper type or union?
-
     Index index{};
-    size_t pos = 0;
     std::vector<Index> wem_indices;
+    BankHeader bank_header{};
+    EventMap event_objects{};
+    EventActionMap event_action_objects{};
 
-    while (auto s_result = co_await read_struct<Section>(bnk_file, pos))
+    while (auto s_result = co_await maybe_read_struct<Section>(bank_file))
     {
         auto section = s_result.value();
 
@@ -216,22 +197,23 @@ extract_file(boost::asio::stream_file& bnk_file,
             section.size = std::byteswap(section.size);
         }
 
-        const auto section_pos = pos;
+        // const auto section_pos = pos;
+        const auto section_pos = bank_file.seek(0, boost::asio::file_base::seek_cur);
 
         const auto sign = section.sign;
         if (compare(sign, "BKHD"))
         {
-            auto bh_result = co_await read_struct<BankHeader>(bnk_file, pos);
-            auto bank_header = bh_result.value();
-            pos = bnk_file.seek(section.size - sizeof(BankHeader),
-                                boost::asio::file_base::seek_cur);
+            auto bh_result = co_await maybe_read_struct<BankHeader>(bank_file);
+            bank_header = bh_result.value();
+            bank_file.seek(section.size - sizeof(BankHeader),
+                           boost::asio::file_base::seek_cur);
         }
         else if (compare(sign, "DIDX"))
         {
             // WEM file indices.
             for (auto i = 0U; i < section.size; i += sizeof(Index))
             {
-                auto i_result = co_await read_struct<Index>(bnk_file, pos);
+                auto i_result = co_await maybe_read_struct<Index>(bank_file);
                 index = i_result.value();
                 wem_indices.emplace_back(index);
             }
@@ -250,9 +232,9 @@ extract_file(boost::asio::stream_file& bnk_file,
                     offset = std::byteswap(offset);
                 }
 
-                std::vector<char> data(size, 0);
+                std::vector<uint8_t> data(size, 0);
                 co_await boost::asio::async_read(
-                    bnk_file,
+                    bank_file,
                     boost::asio::buffer(data, size),
                     boost::asio::deferred
                 );
@@ -265,21 +247,33 @@ extract_file(boost::asio::stream_file& bnk_file,
         }
         else if (compare(sign, "HIRC"))
         {
-            auto object_count = co_await read_struct<uint32_t>(bnk_file, pos);
+            auto object_count_result = co_await maybe_read_struct<uint32_t>(bank_file);
+            const auto object_count = object_count_result.value();
 
             for (auto i = 0U; i < object_count; ++i)
             {
-                auto o_result = co_await read_struct<Object>(bnk_file, pos);
+                auto o_result = co_await maybe_read_struct<Object>(bank_file);
+                // Ignore failed object reads.
+                if (!o_result)
+                {
+                    continue;
+                }
+
                 auto object = o_result.value();
 
-                // TODO: check object type.
+                // TODO: make a class to have these as members?
+                co_await handle_object(
+                    bank_file, bank_header, object, event_objects,
+                    event_action_objects);
 
-                bnk_file.seek(object.size - sizeof(uint32_t),
-                              boost::asio::file_base::seek_cur);
+                bank_file.seek(object.size - sizeof(uint32_t),
+                               boost::asio::file_base::seek_cur);
+
+                co_yield object;
             }
         }
 
-        pos = bnk_file.seek(
+        bank_file.seek(
             section_pos + section.size,
             boost::asio::file_base::seek_set);
     }
@@ -292,22 +286,19 @@ extract_file_task(boost::asio::io_context& ctx,
                   const std::string& filename,
                   bool swap_byte_order = false)
 {
-    boost::filesystem::path path = boost::filesystem::current_path();
+    const auto path = make_path(filename);
+
     std::cout << "extract_file_task\n";
     std::cout << "path     : " << path << "\n";
     std::cout << "filename : " << filename << "\n";
 
-    boost::asio::stream_file bnk_file{
+    boost::asio::stream_file bank_file{
         ctx,
-        filename,
+        path.string(),
         boost::asio::stream_file::read_only
     };
 
-    std::cout << "file init\n";
-
-    std::vector<uint32_t> ids;
-
-    auto exc = extract_file(bnk_file, swap_byte_order);
+    auto exc = extract_file(bank_file, swap_byte_order);
     while (auto result = co_await exc.async_resume(boost::asio::use_awaitable))
     {
         auto result_variant = result.value();
@@ -316,14 +307,15 @@ extract_file_task(boost::asio::io_context& ctx,
             auto wem_file = std::get<WEMFile>(result_variant);
             std::cout << "id       : " << wem_file.index.id << "\n";
             std::cout << "data len : " << wem_file.data.size() << "\n";
-
-            ids.emplace_back(wem_file.index.id);
+        }
+        else if (std::holds_alternative<Object>(result_variant))
+        {
+            auto object = std::get<Object>(result_variant);
+            std::cout << "id       : " << object.id << "\n";
+            std::cout << "type     : " << static_cast<int>(object.type) << "\n";
+            std::cout << "size     : " << object.size << "\n";
         }
     }
-
-    std::cout << "ids.size(): " << ids.size() << "\n";
-
-    std::cout << "?\n" << std::endl;
 
     co_return;
 }
