@@ -322,4 +322,4 @@ extract_file_task(boost::asio::io_context& ctx,
 
 } // namespace bnkextr
 
-#endif //BNKEXTR_BNKEXTR_H
+#endif // BNKEXTR_BNKEXTR_H

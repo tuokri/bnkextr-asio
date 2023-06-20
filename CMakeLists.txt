@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.23)
 
-project(bnkextr)
+project(bnkextr_asio)
 
 set(CMAKE_CXX_STANDARD 23)
 
