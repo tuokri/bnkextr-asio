@@ -1,7 +1,7 @@
 #pragma once
 
-#ifndef BNKEXTR_BNKEXTR_H
-#define BNKEXTR_BNKEXTR_H
+#ifndef BNKEXTR_ASIO_BNKEXTR_H
+#define BNKEXTR_ASIO_BNKEXTR_H
 
 #include <iostream>
 #include <string>
@@ -322,4 +322,4 @@ extract_file_task(boost::asio::io_context& ctx,
 
 } // namespace bnkextr
 
-#endif // BNKEXTR_BNKEXTR_H
+#endif // BNKEXTR_ASIO_BNKEXTR_H

@@ -1,7 +1,7 @@
 #pragma once
 
-#ifndef BNKEXTR_STRUCTS_H
-#define BNKEXTR_STRUCTS_H
+#ifndef BNKEXTR_ASIO_STRUCTS_H
+#define BNKEXTR_ASIO_STRUCTS_H
 
 #include <vector>
 #include <cstdint>
@@ -137,4 +137,4 @@ struct WEMFile
 
 } // bnkextr
 
-#endif // BNKEXTR_STRUCTS_H
+#endif // BNKEXTR_ASIO_STRUCTS_H
